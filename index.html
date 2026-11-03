@@ -145,6 +145,9 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 }
 .dlg .row { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 .dlg a { color: var(--brand); }
+.key-msg { font-size: 13px; border-radius: 8px; padding: 8px 10px; background: var(--chip); }
+.key-msg.bad { color: var(--now); }
+.key-msg.good { color: var(--ok); }
 </style>
 </head>
 <body>
@@ -164,6 +167,7 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 <main>
   <div class="notice" id="keyNotice" hidden>
     <div><strong>還沒設定 TDX 金鑰，目前只顯示臺北市路線</strong>（202區、262、262區、通勤11/12）。綠3、綠6、綠8、242、275、908、921、982、F512副、F513 這些新北市路線需要交通部 TDX 的免費金鑰。</div>
+    <div>已經輸入過？iPhone 從主畫面圖示打開的 app 和 Safari 的資料是分開的，要在這裡再輸入一次。</div>
     <div class="row"><button class="btn" id="noticeSetup">輸入 TDX 金鑰</button></div>
   </div>
   <div class="notice err" id="errBox" hidden></div>
@@ -175,8 +179,9 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
   <form class="dlg" id="settingsForm" method="dialog">
     <h3>TDX API 金鑰</h3>
     <p>到 <a href="https://tdx.transportdata.tw/register" target="_blank" rel="noopener">tdx.transportdata.tw</a> 免費註冊會員，登入後在「會員中心 → 資料服務 → API 金鑰」取得 Client Id 與 Client Secret。金鑰只存在這支手機的瀏覽器裡。每次查詢只用 1 次額度，免費方案每月約 3,000 次。</p>
-    <label for="cid">Client Id<input id="cid" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
-    <label for="csec">Client Secret<input id="csec" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+    <label for="cid">Client Id<input id="cid" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+    <label for="csec">Client Secret<input id="csec" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+    <div class="key-msg" id="keyMsg" role="status" hidden></div>
     <div class="row">
       <button type="button" class="btn ghost" id="clearKey">清除金鑰</button>
       <button type="button" class="btn ghost" id="cancelKey">取消</button>
@@ -229,16 +234,36 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
   const state = { rows: [], updated: null, loading: false, tab: Number(store.get('tab', 0)) === 1 ? 1 : 0 };
 
   // ---------- TDX (New Taipei) ----------
-  const creds = () => store.get('tdxCreds', null);
+  // Pasted keys often carry spaces, line breaks or invisible characters.
+  const cleanKey = (s) => String(s || '').replace(/[\s​-‍﻿]/g, '');
+  const creds = () => {
+    const c = store.get('tdxCreds', null);
+    return c && { id: cleanKey(c.id), secret: cleanKey(c.secret) };
+  };
+
+  async function requestToken(c) {
+    const body = new URLSearchParams({ grant_type: 'client_credentials', client_id: c.id, client_secret: c.secret });
+    let r;
+    try {
+      r = await fetch(TDX_TOKEN, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body });
+    } catch {
+      throw new Error('連不到 TDX，請檢查網路後按「更新」。');
+    }
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const why = j.error === 'invalid_client'
+        ? 'TDX 不接受這組 Client Id / Client Secret。請到 TDX 會員中心重新複製兩個值（注意不要對調），貼上後按「儲存」。'
+        : `TDX 登入失敗（${r.status}${j.error_description ? `：${j.error_description}` : ''}）。`;
+      throw new Error(why);
+    }
+    return j;
+  }
 
   async function token() {
     const c = creds();
     const cached = store.get('tdxToken', null);
     if (cached && cached.exp > Date.now() + 60_000 && cached.cid === c.id) return cached.tok;
-    const body = new URLSearchParams({ grant_type: 'client_credentials', client_id: c.id, client_secret: c.secret });
-    const r = await fetch(TDX_TOKEN, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body });
-    if (!r.ok) throw new Error(r.status === 400 || r.status === 401 ? 'TDX 金鑰錯誤，請到「設定」重新輸入。' : `TDX 登入失敗（${r.status}）`);
-    const j = await r.json();
+    const j = await requestToken(c);
     store.set('tdxToken', { tok: j.access_token, exp: Date.now() + j.expires_in * 1000, cid: c.id });
     return j.access_token;
   }
@@ -382,21 +407,40 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
     state.tab = Number(b.dataset.tab); store.set('tab', state.tab); render();
   });
   const dlg = $('settings');
+  function keyMsg(text, cls) {
+    const m = $('keyMsg');
+    m.hidden = !text; m.textContent = text || ''; m.className = `key-msg ${cls || ''}`;
+  }
   function openSettings() {
     const c = creds() || { id: '', secret: '' };
     $('cid').value = c.id; $('csec').value = c.secret;
+    keyMsg('');
     dlg.showModal();
   }
   $('settingsBtn').addEventListener('click', openSettings);
   $('noticeSetup').addEventListener('click', openSettings);
   $('cancelKey').addEventListener('click', () => dlg.close());
   $('clearKey').addEventListener('click', () => { store.del('tdxCreds'); store.del('tdxToken'); dlg.close(); refresh(); });
-  $('settingsForm').addEventListener('submit', (ev) => {
+  // Check the key with TDX before saving, so a bad paste is caught here instead of on every open.
+  $('settingsForm').addEventListener('submit', async (ev) => {
     ev.preventDefault();
-    const id = $('cid').value.trim(), secret = $('csec').value.trim();
-    if (!id || !secret) return;
-    store.set('tdxCreds', { id, secret }); store.del('tdxToken');
-    dlg.close(); refresh();
+    const id = cleanKey($('cid').value), secret = cleanKey($('csec').value);
+    $('cid').value = id; $('csec').value = secret;
+    if (!id || !secret) { keyMsg('兩個欄位都要填。', 'bad'); return; }
+    keyMsg('正在向 TDX 確認金鑰…');
+    $('saveKey').disabled = true;
+    try {
+      const j = await requestToken({ id, secret });
+      store.set('tdxCreds', { id, secret });
+      store.set('tdxToken', { tok: j.access_token, exp: Date.now() + j.expires_in * 1000, cid: id });
+      if (!creds()) { keyMsg('金鑰正確，但這個瀏覽器無法儲存資料（可能是無痕模式）。', 'bad'); return; }
+      keyMsg('金鑰正確，已儲存。', 'good');
+      setTimeout(() => { dlg.close(); refresh(); }, 700);
+    } catch (err) {
+      keyMsg(err.message, 'bad');
+    } finally {
+      $('saveKey').disabled = false;
+    }
   });
 
   // A home-screen app resumes instead of reloading, so treat coming back after a while as opening it again.
