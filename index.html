@@ -67,9 +67,14 @@ header {
   height: 34px; min-width: 34px; padding: 0 10px; cursor: pointer; font-size: 13px; font-weight: 500;
 }
 .icon-btn:active { background: rgba(255,255,255,.26); }
-.trip { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px; flex-wrap: wrap; }
-.trip .arrow { opacity: .7; }
-.trip .stop { background: rgba(255,255,255,.16); border-radius: 6px; padding: 2px 8px; }
+.seg { display: grid; grid-template-columns: 1fr 1fr; background: rgba(0,0,0,.18); border-radius: 10px; padding: 3px; }
+.seg button {
+  border: 0; background: transparent; color: var(--brand-fg); padding: 8px 4px; border-radius: 8px;
+  font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap;
+}
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--brand); }
+.board-note { font-size: 13px; color: var(--muted); }
+.board-note strong { color: var(--fg); }
 .status { font-size: 12px; opacity: .85; font-variant-numeric: tabular-nums; }
 
 main {
@@ -149,18 +154,21 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
     <button class="icon-btn" id="refreshBtn" aria-label="立即更新">↻ 更新</button>
     <button class="icon-btn" id="settingsBtn">設定</button>
   </div>
-  <div class="trip"><span class="stop">捷運景安站(景平路)</span><span class="arrow">→</span><span class="stop">下一站 南華路口</span></div>
+  <div class="seg" role="group" aria-label="選擇方向">
+    <button id="tab-0" data-tab="0" aria-pressed="true">景安站 → 南華路口</button>
+    <button id="tab-1" data-tab="1" aria-pressed="false">南華路口 → 景安站</button>
+  </div>
   <div class="status" id="status">載入中…</div>
 </header>
 
 <main>
   <div class="notice" id="keyNotice" hidden>
-    <div><strong>還沒設定 TDX 金鑰，目前只顯示臺北市路線</strong>（202區、262、262區、通勤11）。綠3、綠6、綠8、242、275、982、F512副、F513 這些新北市路線需要交通部 TDX 的免費金鑰。</div>
+    <div><strong>還沒設定 TDX 金鑰，目前只顯示臺北市路線</strong>（202區、262、262區、通勤11/12）。綠3、綠6、綠8、242、275、908、921、982、F512副、F513 這些新北市路線需要交通部 TDX 的免費金鑰。</div>
     <div class="row"><button class="btn" id="noticeSetup">輸入 TDX 金鑰</button></div>
   </div>
   <div class="notice err" id="errBox" hidden></div>
   <div id="board"></div>
-  <footer>只在打開或按「更新」時查詢，畫面開著時每分鐘更新一次，最多 10 分鐘。<br>資料來源：交通部 TDX、臺北市公車動態資訊。</footer>
+  <footer>只在打開網頁或按「更新」時查詢一次。<br>資料來源：交通部 TDX、臺北市公車動態資訊。</footer>
 </main>
 
 <dialog id="settings">
@@ -179,19 +187,35 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 
 <script>
 (() => {
-  // Route-directions whose stop after 捷運景安站(景平路) is 南華路口 (from the city stop-sequence data).
-  // New Taipei: stop id → [route, toward]. TDX StopID matches these ids; route name + direction is the fallback match.
-  const NTPC = {
-    140623: ['綠6', 0, '中和'], 140689: ['綠3', 0, '中和'], 140765: ['綠8', 0, '中和'],
-    196084: ['F512副', 0, '光復國小'], 159909: ['F513', 1, '灰瑤'], 20213: ['242', 1, '中和'],
-    184992: ['982', 1, '新莊'], 138150: ['275', 1, '宏國德霖科技大學'],
-  };
-  // Taipei: stop id → [route, toward].
-  const TPE = {
-    19208: ['202區', '臺北科技大學'], 40609: ['262', '宏國德霖科技大學'],
-    40736: ['262區', '中和'], 205039: ['通勤11', '中和'],
-  };
-  const AUTO_EVERY_S = 60, AUTO_FOR_S = 600;
+  // Route-directions whose next stop is the other station (from the city stop-sequence data).
+  // ntpc: New Taipei stop id → [route, direction, toward]. TDX StopID matches these ids; route name + direction is the fallback match.
+  // tpe: Taipei stop id → [route, toward].
+  const TRIPS = [
+    {
+      from: '捷運景安站', stop: '捷運景安站(景平路)', to: '南華路口',
+      ntpc: {
+        140623: ['綠6', 0, '中和'], 140689: ['綠3', 0, '中和'], 140765: ['綠8', 0, '中和'],
+        196084: ['F512副', 0, '光復國小'], 159909: ['F513', 1, '灰瑤'], 20213: ['242', 1, '中和'],
+        184992: ['982', 1, '新莊'], 138150: ['275', 1, '宏國德霖科技大學'],
+      },
+      tpe: {
+        19208: ['202區', '臺北科技大學'], 40609: ['262', '宏國德霖科技大學'],
+        40736: ['262區', '中和'], 205039: ['通勤11', '中和'],
+      },
+    },
+    {
+      from: '南華路口', stop: '南華路口', to: '捷運景安站',
+      ntpc: {
+        198477: ['F513', 0, '秀山站'], 138593: ['908', 0, '捷運景安站'], 20152: ['242', 0, '西門'],
+        184971: ['982', 0, '新店'], 190082: ['908延', 0, '捷運景安站'], 147453: ['921', 0, '捷運景安站'],
+        196094: ['F512副', 1, '烘爐地'], 138080: ['275', 0, '松山機場'],
+      },
+      tpe: {
+        19252: ['202區', '錦繡'], 40650: ['262區', '民生社區'], 40523: ['262', '民生社區'],
+        205028: ['通勤11', '臺北市政府'], 205083: ['通勤12', '臺北市政府'],
+      },
+    },
+  ];
   const TDX = 'https://tdx.transportdata.tw/api/basic/v2/Bus';
   const TDX_TOKEN = 'https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token';
   const TPE_BLOB = 'https://tcgbusfs.blob.core.windows.net/blobbus/GetEstimateTime.gz';
@@ -202,7 +226,7 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
     del(k) { try { localStorage.removeItem(k); } catch {} },
   };
-  const state = { rows: [], updated: null, loading: false, openedAt: Date.now() };
+  const state = { rows: [], updated: null, loading: false, tab: Number(store.get('tab', 0)) === 1 ? 1 : 0 };
 
   // ---------- TDX (New Taipei) ----------
   const creds = () => store.get('tdxCreds', null);
@@ -221,24 +245,30 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 
   async function loadNtpc() {
     const tok = await token();
-    const f = encodeURIComponent("startswith(StopName/Zh_tw,'捷運景安站')");
+    const f = encodeURIComponent("startswith(StopName/Zh_tw,'捷運景安站') or startswith(StopName/Zh_tw,'南華路口')");
     const r = await fetch(`${TDX}/EstimatedTimeOfArrival/City/NewTaipei?%24filter=${f}&%24format=JSON`, { headers: { authorization: `Bearer ${tok}` } });
     if (r.status === 401) { store.del('tdxToken'); throw new Error('TDX 授權過期，請按「更新」重試。'); }
     if (r.status === 429) throw new Error('TDX 額度用完或查詢太頻繁，稍後再試。');
     if (!r.ok) throw new Error(`TDX 回應錯誤（${r.status}）`);
     const list = await r.json();
-    const byName = new Map(Object.values(NTPC).map(([n, d, t]) => [`${n}|${d}`, t]));
     const rows = [];
-    for (const e of list) {
-      const hit = NTPC[e.StopID];
-      const name = e.SubRouteName?.Zh_tw || e.RouteName?.Zh_tw;
-      const toward = hit ? hit[2] : byName.get(`${name}|${e.Direction}`) ?? byName.get(`${e.RouteName?.Zh_tw}|${e.Direction}`);
-      if (!hit && (toward == null || !e.StopName.Zh_tw.includes('景平路'))) continue;
-      rows.push({
-        route: hit ? hit[0] : name, toward, sec: e.EstimateTime ?? null, status: e.StopStatus ?? 0,
-        next: e.NextBusTime || null, last: !!e.IsLastBus, plate: e.PlateNumb || '',
-      });
-    }
+    TRIPS.forEach((trip, ti) => {
+      const byName = new Map(Object.values(trip.ntpc).map(([n, d, t]) => [`${n}|${d}`, t]));
+      const seen = new Set();
+      for (const e of list) {
+        const hit = trip.ntpc[e.StopID];
+        const name = e.SubRouteName?.Zh_tw || e.RouteName?.Zh_tw;
+        const toward = hit ? hit[2] : byName.get(`${name}|${e.Direction}`) ?? byName.get(`${e.RouteName?.Zh_tw}|${e.Direction}`);
+        if (!hit && (toward == null || e.StopName.Zh_tw !== trip.stop)) continue;
+        const route = hit ? hit[0] : name;
+        if (seen.has(route)) continue;
+        seen.add(route);
+        rows.push({
+          trip: ti, route, toward, sec: e.EstimateTime ?? null, status: e.StopStatus ?? 0,
+          next: e.NextBusTime || null, last: !!e.IsLastBus, plate: e.PlateNumb || '',
+        });
+      }
+    });
     return rows;
   }
 
@@ -250,11 +280,12 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
     const text = await new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).text();
     const rows = [];
     for (const e of JSON.parse(text).BusInfo) {
-      const s = TPE[e.StopID];
-      if (!s) continue;
+      const ti = TRIPS.findIndex((tr) => tr.tpe[e.StopID]);
+      if (ti < 0) continue;
+      const s = TRIPS[ti].tpe[e.StopID];
       const t = Number(e.EstimateTime);
       // Negative values: -1 尚未發車, -2 交管不停靠, -3 末班已過, -4 今日未營運
-      rows.push({ route: s[0], toward: s[1], sec: t >= 0 ? t : null, status: t >= 0 ? 0 : -t, next: null, last: false, plate: '' });
+      rows.push({ trip: ti, route: s[0], toward: s[1], sec: t >= 0 ? t : null, status: t >= 0 ? 0 : -t, next: null, last: false, plate: '' });
     }
     return rows;
   }
@@ -296,17 +327,21 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
     </div>`;
 
   function render() {
+    for (const b of document.querySelectorAll('.seg button')) b.setAttribute('aria-pressed', String(Number(b.dataset.tab) === state.tab));
+    const trip = TRIPS[state.tab];
     const board = $('board');
-    if (!state.rows.length) {
-      board.innerHTML = `<div class="list"><div class="empty">${state.loading ? '查詢中…' : '目前沒有資料'}</div></div>`;
+    const note = `<div class="board-note">在 <strong>${esc(trip.stop)}</strong> 站牌上車，下一站是 <strong>${esc(trip.to)}</strong></div>`;
+    const tripRows = state.rows.filter((r) => r.trip === state.tab);
+    if (!tripRows.length) {
+      board.innerHTML = `${note}<div class="list"><div class="empty">${state.loading ? '查詢中…' : '目前沒有資料'}</div></div>`;
       return;
     }
-    const rows = state.rows.map((r) => ({ r, e: etaInfo(r) }))
+    const rows = tripRows.map((r) => ({ r, e: etaInfo(r) }))
       .sort((a, b) => a.e.rank - b.e.rank || a.r.route.localeCompare(b.r.route, 'zh-Hant', { numeric: true }));
     const live = rows.filter((x) => x.e.live);
     const rest = rows.filter((x) => !x.e.live);
     const first = live[0];
-    board.innerHTML = `
+    board.innerHTML = `${note}
       ${first ? `<div class="next">
         <div class="label">最快到站</div>
         <div class="info"><div class="route">${esc(first.r.route)}</div><div class="dest">往 ${esc(first.r.toward)}</div></div>
@@ -341,7 +376,11 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
   }
 
   // ---------- events ----------
-  $('refreshBtn').addEventListener('click', () => { state.openedAt = Date.now(); refresh(); });
+  $('refreshBtn').addEventListener('click', refresh);
+  document.querySelector('.seg').addEventListener('click', (ev) => {
+    const b = ev.target.closest('button[data-tab]'); if (!b) return;
+    state.tab = Number(b.dataset.tab); store.set('tab', state.tab); render();
+  });
   const dlg = $('settings');
   function openSettings() {
     const c = creds() || { id: '', secret: '' };
@@ -360,17 +399,10 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
     dlg.close(); refresh();
   });
 
-  // Refresh when the app comes back to the screen; while open, every minute for up to 10 minutes.
+  // A home-screen app resumes instead of reloading, so treat coming back after a while as opening it again.
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) return;
-    state.openedAt = Date.now();
-    if (!state.updated || Date.now() - state.updated > 20_000) refresh();
+    if (!document.hidden && state.updated && Date.now() - state.updated > 60_000) refresh();
   });
-  setInterval(() => {
-    if (document.hidden || state.loading || !state.updated) return;
-    if (Date.now() - state.openedAt > AUTO_FOR_S * 1000) return;
-    if (Date.now() - state.updated >= AUTO_EVERY_S * 1000) refresh();
-  }, 5000);
 
   render();
   refresh();
