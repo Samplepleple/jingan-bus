@@ -166,7 +166,7 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 
 <main>
   <div class="notice" id="keyNotice" hidden>
-    <div><strong>目前只顯示臺北市營運的路線</strong>（202、262、通勤11/12 等）。經過景安站的新北市路線需要交通部 TDX 的免費 API 金鑰才能取得。</div>
+    <div><strong>還沒設定 TDX 金鑰，目前只顯示臺北市營運的 6 條路線</strong>（202、262、通勤11/12 等）。綠6 等經過景安站的新北市路線，資料只能透過交通部 TDX 取得，需要免費的 API 金鑰。</div>
     <div class="row"><button class="btn" id="noticeSetup">輸入 TDX 金鑰</button></div>
   </div>
   <div class="notice err" id="errBox" hidden></div>
@@ -200,11 +200,22 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
   // Taipei-operated stops at the two stations (from the Taipei open-data stop list).
   const TPE_STOPS = {
     19093: ['捷運景安站', '202', 0], 19170: ['捷運景安站', '202', 1],
+    19208: ['捷運景安站(景平路)', '202區', 0], 19253: ['捷運景安站(景平路)', '202區', 1],
+    40524: ['捷運景安站(景平路)', '262', 0], 40609: ['捷運景安站(景平路)', '262', 1],
+    40651: ['捷運景安站(景平路)', '262區', 0], 40736: ['捷運景安站(景平路)', '262區', 1],
+    205029: ['捷運景安站(景平路)', '通勤11', 0], 205039: ['捷運景安站(景平路)', '通勤11', 1],
+    205084: ['捷運景安站(景平路)', '通勤12', 0],
     19209: ['南華路口', '202區', 0], 19252: ['南華路口', '202區', 1],
     40523: ['南華路口', '262', 0], 40610: ['南華路口', '262', 1],
     40650: ['南華路口', '262區', 0], 40737: ['南華路口', '262區', 1],
     205028: ['南華路口', '通勤11', 0], 205040: ['南華路口', '通勤11', 1],
     205083: ['南華路口', '通勤12', 0],
+  };
+  // "捷運景安站(景平路)" → station "捷運景安站", spot "景平路"
+  const splitStop = (name) => {
+    const station = STATIONS.find((s) => name.startsWith(s));
+    const m = name.slice(station.length).match(/[(（](.+?)[)）]/);
+    return { station, spot: m ? m[1] : '' };
   };
   const TPE_ROUTE_ENDS = {
     '202': ['新店', '國父紀念館'], '202區': ['錦繡', '臺北科技大學'],
@@ -312,7 +323,7 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
         for (const e of mine) {
           const [dep, dst] = ends[e.RouteUID] || ['', ''];
           rows.push({
-            station: STATIONS.find((s) => e.StopName.Zh_tw.startsWith(s)),
+            ...splitStop(e.StopName.Zh_tw),
             route: e.SubRouteName?.Zh_tw || e.RouteName.Zh_tw,
             routeKey: e.RouteName.Zh_tw,
             dir: e.Direction,
@@ -342,11 +353,11 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
     for (const e of data) {
       const s = TPE_STOPS[e.StopID];
       if (!s) continue;
-      const [station, route, dir] = s;
+      const [stopName, route, dir] = s;
       const t = Number(e.EstimateTime);
       const ends = TPE_ROUTE_ENDS[route];
       rows.push({
-        station, route, routeKey: route, dir,
+        ...splitStop(stopName), route, routeKey: route, dir,
         toward: dir === 1 ? ends[0] : ends[1],
         sec: t >= 0 ? t : null,
         status: t >= 0 ? 0 : -t, // -1 尚未發車 -2 交管不停靠 -3 末班已過 -4 今日未營運
@@ -409,7 +420,7 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
           <button class="star" data-fav="${esc(r.routeKey)}" aria-pressed="${fav}" aria-label="${fav ? '取消常用' : '設為常用'} ${esc(r.route)}">★</button>
           <div class="info">
             <div class="route">${esc(r.route)}${r.last ? '<span class="tag">末班車</span>' : ''}</div>
-            <div class="dest">往 ${esc(r.toward || '—')}${r.plate ? ` · ${esc(r.plate)}` : ''}</div>
+            <div class="dest">往 ${esc(r.toward || '—')}${r.spot ? ` · ${esc(r.spot)}站牌` : ''}${r.plate ? ` · ${esc(r.plate)}` : ''}</div>
           </div>
           <div class="eta ${e.cls}">${e.html}</div>
         </div>`).join('');
